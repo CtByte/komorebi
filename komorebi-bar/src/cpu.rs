@@ -18,6 +18,11 @@ use std::time::Instant;
 use sysinfo::RefreshKind;
 use sysinfo::System;
 
+use eframe::egui::Color32;
+use eframe::egui::Frame;
+use eframe::egui::Margin;
+use eframe::egui::Rounding;
+
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CpuConfig {
     /// Enable the Cpu widget
@@ -99,19 +104,39 @@ impl BarWidget for Cpu {
                     TextFormat::simple(font_id, ctx.style().visuals.text_color()),
                 );
 
-                if ui
-                    .add(
-                        Label::new(layout_job)
-                            .selectable(false)
-                            .sense(Sense::click()),
-                    )
-                    .clicked()
-                {
-                    if let Err(error) = Command::new("cmd.exe").args(["/C", "taskmgr.exe"]).spawn()
-                    {
-                        eprintln!("{}", error)
-                    }
-                }
+                Frame::none()
+                    .fill(Color32::from_black_alpha(255u8))
+                    .outer_margin(Margin::symmetric(0.0, 0.0))
+                    .inner_margin(Margin::symmetric(7.0, 2.0))
+                    .rounding(Rounding::same(15.0))
+                    .stroke(ui.style().visuals.widgets.noninteractive.bg_stroke)
+                    .show(ui, |ui| {
+                        if ui
+                            .add(
+                                Label::new(layout_job)
+                                    .selectable(false)
+                                    .sense(Sense::click()),
+                            )
+                            .clicked()
+                        {
+                            if let Err(error) =
+                                Command::new("cmd.exe").args(["/C", "taskmgr.exe"]).spawn()
+                            {
+                                eprintln!("{}", error)
+                            }
+                        }
+                    });
+
+                //ui.add(Frame::none()
+                //    .fill(Color32::from_black_alpha(255u8))
+                //    .outer_margin(Margin::symmetric(0.0, 0.0))
+                //    .inner_margin(Margin::symmetric(5.0, 5.0))
+                //    .rounding(Rounding::same(15.0))
+                //    .stroke(self.style().visuals.widgets.noninteractive.bg_stroke)
+                //    .show(self, |ui| {
+                //        Label::new(layout_job)
+                //            .selectable(false);
+                //    }));
             }
 
             ui.add_space(WIDGET_SPACING);
