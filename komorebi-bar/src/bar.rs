@@ -24,6 +24,7 @@ use eframe::egui::FontId;
 use eframe::egui::Frame;
 use eframe::egui::Layout;
 use eframe::egui::Margin;
+use eframe::egui::Rounding;
 use eframe::egui::Style;
 use eframe::egui::TextStyle;
 use font_loader::system_fonts;
@@ -437,13 +438,29 @@ impl eframe::App for Komobar {
             ui.horizontal_centered(|ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     for w in &mut self.left_widgets {
-                        w.render(ctx, ui);
+                        Frame::none()
+                            //.fill(Color32::from_black_alpha(255u8))
+                            .outer_margin(Margin::symmetric(0.0, 0.0))
+                            .inner_margin(Margin::symmetric(7.0, 2.0))
+                            .rounding(Rounding::same(15.0))
+                            .stroke(ui.style().visuals.widgets.noninteractive.bg_stroke)
+                            .show(ui, |ui| {
+                                w.render(ctx, ui);
+                            });
                     }
                 });
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     for w in &mut self.right_widgets {
-                        w.render(ctx, ui);
+                        Frame::none()
+                            //.fill(Color32::from_black_alpha(255u8))
+                            .outer_margin(Margin::symmetric(0.0, 0.0))
+                            .inner_margin(Margin::symmetric(7.0, 2.0))
+                            .rounding(Rounding::same(15.0))
+                            .stroke(ui.style().visuals.widgets.noninteractive.bg_stroke)
+                            .show(ui, |ui| {
+                                w.render(ctx, ui);
+                            });
                     }
                 })
             })
