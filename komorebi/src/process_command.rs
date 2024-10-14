@@ -61,6 +61,7 @@ use crate::winevent_listener;
 use crate::GlobalState;
 use crate::Notification;
 use crate::NotificationEvent;
+use crate::State;
 use crate::ANIMATION_DURATION;
 use crate::ANIMATION_ENABLED;
 use crate::ANIMATION_FPS;
@@ -68,8 +69,8 @@ use crate::ANIMATION_STYLE;
 use crate::CUSTOM_FFM;
 use crate::DATA_DIR;
 use crate::DISPLAY_INDEX_PREFERENCES;
-use crate::FLOAT_IDENTIFIERS;
 use crate::HIDING_BEHAVIOUR;
+use crate::IGNORE_IDENTIFIERS;
 use crate::INITIAL_CONFIGURATION_LOADED;
 use crate::LAYERED_WHITELIST;
 use crate::MANAGE_IDENTIFIERS;
@@ -79,6 +80,7 @@ use crate::OBJECT_NAME_CHANGE_ON_LAUNCH;
 use crate::REMOVE_TITLEBARS;
 use crate::SUBSCRIPTION_PIPES;
 use crate::SUBSCRIPTION_SOCKETS;
+use crate::SUBSCRIPTION_SOCKET_OPTIONS;
 use crate::TCP_CONNECTIONS;
 use crate::TRAY_AND_MULTI_WINDOW_IDENTIFIERS;
 use crate::WINDOWS_11;
@@ -186,6 +188,10 @@ impl WindowManager {
                 }
             }
         }
+
+        #[allow(clippy::useless_asref)]
+        // We don't have From implemented for &mut WindowManager
+        let initial_state = State::from(self.as_ref());
 
         match message {
             SocketMessage::CycleFocusWorkspace(_) | SocketMessage::FocusWorkspaceNumber(_) => {
@@ -394,20 +400,20 @@ impl WindowManager {
                     }));
                 }
             }
-            SocketMessage::FloatRule(identifier, ref id) => {
-                let mut float_identifiers = FLOAT_IDENTIFIERS.lock();
+            SocketMessage::IgnoreRule(identifier, ref id) => {
+                let mut ignore_identifiers = IGNORE_IDENTIFIERS.lock();
 
                 let mut should_push = true;
-                for f in &*float_identifiers {
-                    if let MatchingRule::Simple(f) = f {
-                        if f.id.eq(id) {
+                for i in &*ignore_identifiers {
+                    if let MatchingRule::Simple(i) = i {
+                        if i.id.eq(id) {
                             should_push = false;
                         }
                     }
                 }
 
                 if should_push {
-                    float_identifiers.push(MatchingRule::Simple(IdWithIdentifier {
+                    ignore_identifiers.push(MatchingRule::Simple(IdWithIdentifier {
                         kind: identifier,
                         id: id.clone(),
                         matching_strategy: Option::from(MatchingStrategy::Legacy),
@@ -625,6 +631,11 @@ impl WindowManager {
                 border_manager::BORDER_TEMPORARILY_DISABLED.store(false, Ordering::SeqCst);
                 border_manager::destroy_all_borders()?;
                 self.retile_all(false)?
+            }
+            SocketMessage::RetileWithResizeDimensions => {
+                border_manager::BORDER_TEMPORARILY_DISABLED.store(false, Ordering::SeqCst);
+                border_manager::destroy_all_borders()?;
+                self.retile_all(true)?
             }
             SocketMessage::FlipLayout(layout_flip) => self.flip_layout(layout_flip)?,
             SocketMessage::ChangeLayout(layout) => self.change_workspace_layout_default(layout)?,
@@ -1319,6 +1330,14 @@ impl WindowManager {
                 let socket_path = DATA_DIR.join(socket);
                 sockets.insert(socket.clone(), socket_path);
             }
+            SocketMessage::AddSubscriberSocketWithOptions(ref socket, options) => {
+                let mut sockets = SUBSCRIPTION_SOCKETS.lock();
+                let socket_path = DATA_DIR.join(socket);
+                sockets.insert(socket.clone(), socket_path);
+
+                let mut socket_options = SUBSCRIPTION_SOCKET_OPTIONS.lock();
+                socket_options.insert(socket.clone(), options);
+            }
             SocketMessage::RemoveSubscriberSocket(ref socket) => {
                 let mut sockets = SUBSCRIPTION_SOCKETS.lock();
                 sockets.remove(socket);
@@ -1346,14 +1365,51 @@ impl WindowManager {
                 self.resize_delta = delta;
             }
             SocketMessage::ToggleWindowContainerBehaviour => {
-                match self.window_container_behaviour {
+                match self.window_management_behaviour.current_behaviour {
                     WindowContainerBehaviour::Create => {
-                        self.window_container_behaviour = WindowContainerBehaviour::Append;
+                        self.window_management_behaviour.current_behaviour =
+                            WindowContainerBehaviour::Append;
                     }
                     WindowContainerBehaviour::Append => {
-                        self.window_container_behaviour = WindowContainerBehaviour::Create;
+                        self.window_management_behaviour.current_behaviour =
+                            WindowContainerBehaviour::Create;
                     }
                 }
+            }
+            SocketMessage::ToggleFloatOverride => {
+                self.window_management_behaviour.float_override =
+                    !self.window_management_behaviour.float_override;
+            }
+            SocketMessage::ToggleWorkspaceWindowContainerBehaviour => {
+                let current_global_behaviour = self.window_management_behaviour.current_behaviour;
+                if let Some(behaviour) = self
+                    .focused_workspace_mut()?
+                    .window_container_behaviour_mut()
+                {
+                    match behaviour {
+                        WindowContainerBehaviour::Create => {
+                            *behaviour = WindowContainerBehaviour::Append
+                        }
+                        WindowContainerBehaviour::Append => {
+                            *behaviour = WindowContainerBehaviour::Create
+                        }
+                    }
+                } else {
+                    self.focused_workspace_mut()?
+                        .set_window_container_behaviour(Some(match current_global_behaviour {
+                            WindowContainerBehaviour::Create => WindowContainerBehaviour::Append,
+                            WindowContainerBehaviour::Append => WindowContainerBehaviour::Create,
+                        }));
+                };
+            }
+            SocketMessage::ToggleWorkspaceFloatOverride => {
+                let current_global_override = self.window_management_behaviour.float_override;
+                if let Some(float_override) = self.focused_workspace_mut()?.float_override_mut() {
+                    *float_override = !*float_override;
+                } else {
+                    self.focused_workspace_mut()?
+                        .set_float_override(Some(!current_global_override));
+                };
             }
             SocketMessage::WindowHidingBehaviour(behaviour) => {
                 let mut hiding_behaviour = HIDING_BEHAVIOUR.lock();
@@ -1395,7 +1451,7 @@ impl WindowManager {
                         }
                     }
 
-                    border_manager::send_notification();
+                    border_manager::send_notification(None);
                 }
             }
             SocketMessage::BorderColour(kind, r, g, b) => match kind {
@@ -1410,6 +1466,9 @@ impl WindowManager {
                 }
                 WindowKind::Unfocused => {
                     border_manager::UNFOCUSED.store(Rgb::new(r, g, b).into(), Ordering::SeqCst);
+                }
+                WindowKind::Floating => {
+                    border_manager::FLOATING.store(Rgb::new(r, g, b).into(), Ordering::SeqCst);
                 }
             },
             SocketMessage::BorderStyle(style) => {
@@ -1534,13 +1593,15 @@ impl WindowManager {
             | SocketMessage::IdentifyBorderOverflowApplication(_, _) => {}
         };
 
-        let notification = Notification {
-            event: NotificationEvent::Socket(message.clone()),
-            state: self.as_ref().into(),
-        };
+        notify_subscribers(
+            Notification {
+                event: NotificationEvent::Socket(message.clone()),
+                state: self.as_ref().into(),
+            },
+            initial_state.has_been_modified(self.as_ref()),
+        )?;
 
-        notify_subscribers(&serde_json::to_string(&notification)?)?;
-        border_manager::send_notification();
+        border_manager::send_notification(None);
         transparency_manager::send_notification();
         stackbar_manager::send_notification();
 
@@ -1558,22 +1619,29 @@ pub fn read_commands_uds(wm: &Arc<Mutex<WindowManager>>, mut stream: UnixStream)
     for line in reader.lines() {
         let message = SocketMessage::from_str(&line?)?;
 
-        let mut wm = wm.lock();
-
-        if wm.is_paused {
-            return match message {
-                SocketMessage::TogglePause
-                | SocketMessage::State
-                | SocketMessage::GlobalState
-                | SocketMessage::Stop => Ok(wm.process_command(message, &mut stream)?),
-                _ => {
-                    tracing::trace!("ignoring while paused");
-                    Ok(())
+        match wm.try_lock_for(Duration::from_secs(1)) {
+            None => {
+                tracing::warn!(
+                    "could not acquire window manager lock, not processing message: {message}"
+                );
+            }
+            Some(mut wm) => {
+                if wm.is_paused {
+                    return match message {
+                        SocketMessage::TogglePause
+                        | SocketMessage::State
+                        | SocketMessage::GlobalState
+                        | SocketMessage::Stop => Ok(wm.process_command(message, &mut stream)?),
+                        _ => {
+                            tracing::trace!("ignoring while paused");
+                            Ok(())
+                        }
+                    };
                 }
-            };
-        }
 
-        wm.process_command(message.clone(), &mut stream)?;
+                wm.process_command(message.clone(), &mut stream)?;
+            }
+        }
     }
 
     Ok(())

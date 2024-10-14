@@ -89,7 +89,7 @@ impl BarWidget for Cpu {
                 let mut layout_job = LayoutJob::simple(
                     match self.label_prefix {
                         LabelPrefix::Icon | LabelPrefix::IconAndText => {
-                            egui_phosphor::regular::CIRCUITRY.to_string()
+                            egui_phosphor::regular::CPU.to_string()
                         }
                         LabelPrefix::None | LabelPrefix::Text => String::new(),
                     },
@@ -111,20 +111,19 @@ impl BarWidget for Cpu {
                     .rounding(Rounding::same(15.0))
                     .stroke(ui.style().visuals.widgets.noninteractive.bg_stroke)
                     .show(ui, |ui| {
-                        if ui
-                            .add(
-                                Label::new(layout_job)
-                                    .selectable(false)
-                                    .sense(Sense::click()),
-                            )
-                            .clicked()
-                        {
-                            if let Err(error) =
-                                Command::new("cmd.exe").args(["/C", "taskmgr.exe"]).spawn()
-                            {
-                                eprintln!("{}", error)
-                            }
-                        }
+                if ui
+                    .add(
+                        Label::new(layout_job)
+                            .selectable(false)
+                            .sense(Sense::click()),
+                    )
+                    .clicked()
+                {
+                    if let Err(error) = Command::new("cmd.exe").args(["/C", "taskmgr.exe"]).spawn()
+                    {
+                        eprintln!("{}", error)
+                    }
+                }
                     });
 
                 //ui.add(Frame::none()

@@ -139,7 +139,7 @@ lazy_static! {
     static ref REGEX_IDENTIFIERS: Arc<Mutex<HashMap<String, Regex>>> =
         Arc::new(Mutex::new(HashMap::new()));
     static ref MANAGE_IDENTIFIERS: Arc<Mutex<Vec<MatchingRule>>> = Arc::new(Mutex::new(vec![]));
-    static ref FLOAT_IDENTIFIERS: Arc<Mutex<Vec<MatchingRule>>> = Arc::new(Mutex::new(vec![
+    static ref IGNORE_IDENTIFIERS: Arc<Mutex<Vec<MatchingRule>>> = Arc::new(Mutex::new(vec![
         // mstsc.exe creates these on Windows 11 when a WSL process is launched
         // https://github.com/LGUG2Z/komorebi/issues/74
         MatchingRule::Simple(IdWithIdentifier {
@@ -158,6 +158,7 @@ lazy_static! {
             matching_strategy: Option::from(MatchingStrategy::Equals),
         })
     ]));
+    static ref FLOATING_APPLICATIONS: Arc<Mutex<Vec<MatchingRule>>> = Arc::new(Mutex::new(Vec::new()));
     static ref PERMAIGNORE_CLASSES: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(vec![
         "Chrome_RenderWidgetHostHWND".to_string(),
     ]));
@@ -175,6 +176,8 @@ lazy_static! {
     static ref SUBSCRIPTION_PIPES: Arc<Mutex<HashMap<String, File>>> =
         Arc::new(Mutex::new(HashMap::new()));
     pub static ref SUBSCRIPTION_SOCKETS: Arc<Mutex<HashMap<String, PathBuf>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    pub static ref SUBSCRIPTION_SOCKET_OPTIONS: Arc<Mutex<HashMap<String, SubscribeOptions>>> =
         Arc::new(Mutex::new(HashMap::new()));
     static ref TCP_CONNECTIONS: Arc<Mutex<HashMap<String, TcpStream>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -224,7 +227,6 @@ lazy_static! {
 
     static ref WINDOWS_BY_BAR_HWNDS: Arc<Mutex<HashMap<isize, VecDeque<isize>>>> =
         Arc::new(Mutex::new(HashMap::new()));
-
 }
 
 pub static DEFAULT_WORKSPACE_PADDING: AtomicI32 = AtomicI32::new(10);
@@ -297,18 +299,34 @@ pub struct Notification {
     pub state: State,
 }
 
-pub fn notify_subscribers(notification: &str) -> Result<()> {
+pub fn notify_subscribers(notification: Notification, state_has_been_modified: bool) -> Result<()> {
+    let is_subscription_event = matches!(
+        notification.event,
+        NotificationEvent::Socket(SocketMessage::AddSubscriberSocket(_))
+            | NotificationEvent::Socket(SocketMessage::AddSubscriberSocketWithOptions(_, _))
+    );
+
+    let notification = &serde_json::to_string(&notification)?;
     let mut stale_sockets = vec![];
     let mut sockets = SUBSCRIPTION_SOCKETS.lock();
+    let options = SUBSCRIPTION_SOCKET_OPTIONS.lock();
 
     for (socket, path) in &mut *sockets {
-        match UnixStream::connect(path) {
-            Ok(mut stream) => {
-                tracing::debug!("pushed notification to subscriber: {socket}");
-                stream.write_all(notification.as_bytes())?;
-            }
-            Err(_) => {
-                stale_sockets.push(socket.clone());
+        let apply_state_filter = (*options)
+            .get(socket)
+            .copied()
+            .unwrap_or_default()
+            .filter_state_changes;
+
+        if !apply_state_filter || state_has_been_modified || is_subscription_event {
+            match UnixStream::connect(path) {
+                Ok(mut stream) => {
+                    tracing::debug!("pushed notification to subscriber: {socket}");
+                    stream.write_all(notification.as_bytes())?;
+                }
+                Err(_) => {
+                    stale_sockets.push(socket.clone());
+                }
             }
         }
     }
