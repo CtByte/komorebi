@@ -102,8 +102,9 @@ pub struct WindowManager {
     pub hotwatch: Hotwatch,
     pub virtual_desktop_id: Option<Vec<u8>>,
     pub has_pending_raise_op: bool,
-    pub pending_move_op: Option<(usize, usize, usize)>,
+    pub pending_move_op: Arc<Option<(usize, usize, isize)>>,
     pub already_moved_window_handles: Arc<Mutex<HashSet<isize>>>,
+    pub uncloack_to_ignore: usize,
 }
 
 #[allow(clippy::struct_excessive_bools)]
@@ -288,6 +289,7 @@ struct EnforceWorkspaceRuleOp {
     origin_workspace_idx: usize,
     target_monitor_idx: usize,
     target_workspace_idx: usize,
+    floating: bool,
 }
 impl EnforceWorkspaceRuleOp {
     const fn is_origin(&self, monitor_idx: usize, workspace_idx: usize) -> bool {
@@ -338,8 +340,9 @@ impl WindowManager {
             mouse_follows_focus: true,
             hotwatch: Hotwatch::new()?,
             has_pending_raise_op: false,
-            pending_move_op: None,
+            pending_move_op: Arc::new(None),
             already_moved_window_handles: Arc::new(Mutex::new(HashSet::new())),
+            uncloack_to_ignore: 0,
         })
     }
 
@@ -505,6 +508,7 @@ impl WindowManager {
         origin_workspace_idx: usize,
         target_monitor_idx: usize,
         target_workspace_idx: usize,
+        floating: bool,
         to_move: &mut Vec<EnforceWorkspaceRuleOp>,
     ) -> () {
         tracing::trace!(
@@ -521,6 +525,7 @@ impl WindowManager {
             origin_workspace_idx,
             target_monitor_idx,
             target_workspace_idx,
+            floating,
         });
     }
 
@@ -576,6 +581,8 @@ impl WindowManager {
                         };
 
                         if matched {
+                            let floating = workspace.floating_windows().contains(window);
+
                             if rule.initial_only {
                                 if !already_moved_window_handles.contains(&window.hwnd) {
                                     already_moved_window_handles.insert(window.hwnd);
@@ -587,6 +594,7 @@ impl WindowManager {
                                         j,
                                         rule.monitor_index,
                                         rule.workspace_index,
+                                        floating,
                                         &mut to_move,
                                     );
                                 }
@@ -598,6 +606,7 @@ impl WindowManager {
                                     j,
                                     rule.monitor_index,
                                     rule.workspace_index,
+                                    floating,
                                     &mut to_move,
                                 );
                             }
@@ -616,17 +625,34 @@ impl WindowManager {
 
         // Parse the operation and remove any windows that are not placed according to their rules
         for op in &to_move {
-            let origin_workspace = self
+            let target_area = *self
+                .monitors_mut()
+                .get_mut(op.target_monitor_idx)
+                .ok_or_else(|| anyhow!("there is no monitor with that index"))?
+                .work_area_size();
+
+            let origin_monitor = self
                 .monitors_mut()
                 .get_mut(op.origin_monitor_idx)
-                .ok_or_else(|| anyhow!("there is no monitor with that index"))?
+                .ok_or_else(|| anyhow!("there is no monitor with that index"))?;
+
+            let origin_area = *origin_monitor.work_area_size();
+
+            let origin_workspace = origin_monitor
                 .workspaces_mut()
                 .get_mut(op.origin_workspace_idx)
                 .ok_or_else(|| anyhow!("there is no workspace with that index"))?;
 
+            let mut window = Window::from(op.hwnd);
+
+            // If it is a floating window move it to the target area
+            if op.floating {
+                window.move_to_area(&origin_area, &target_area)?;
+            }
+
             // Hide the window we are about to remove if it is on the currently focused workspace
             if op.is_origin(focused_monitor_idx, focused_workspace_idx) {
-                Window::from(op.hwnd).hide();
+                window.hide();
                 should_update_focused_workspace = true;
             }
 
@@ -656,7 +682,21 @@ impl WindowManager {
                 .get_mut(op.target_workspace_idx)
                 .ok_or_else(|| anyhow!("there is no workspace with that index"))?;
 
-            target_workspace.new_container_for_window(Window::from(op.hwnd));
+            if op.floating {
+                target_workspace
+                    .floating_windows_mut()
+                    .push(Window::from(op.hwnd));
+            } else {
+                //TODO(alex-ds13): should this take into account the target workspace
+                //`window_container_behaviour`?
+                //In the case above a floating window should always be moved as floating,
+                //because it was set as so either manually by the user or by a
+                //`floating_applications` rule so it should stay that way. But a tiled window
+                //when moving to another workspace by a `workspace_rule` should honor that
+                //workspace `window_container_behaviour` in my opinion! Maybe this should be done
+                //on the `new_container_for_window` function instead.
+                target_workspace.new_container_for_window(Window::from(op.hwnd));
+            }
         }
 
         // Only re-tile the focused workspace if we need to
@@ -778,6 +818,133 @@ impl WindowManager {
             );
         }
 
+        Ok(())
+    }
+
+    #[tracing::instrument(skip(self))]
+    pub fn transfer_window(
+        &mut self,
+        origin: (usize, usize, isize),
+        target: (usize, usize, usize),
+    ) -> Result<()> {
+        let (origin_monitor_idx, origin_workspace_idx, w_hwnd) = origin;
+        let (target_monitor_idx, target_workspace_idx, target_container_idx) = target;
+
+        let origin_workspace = self
+            .monitors_mut()
+            .get_mut(origin_monitor_idx)
+            .ok_or_else(|| anyhow!("cannot get monitor idx"))?
+            .workspaces_mut()
+            .get_mut(origin_workspace_idx)
+            .ok_or_else(|| anyhow!("cannot get workspace idx"))?;
+
+        let origin_container_idx = origin_workspace
+            .container_for_window(w_hwnd)
+            .and_then(|c| origin_workspace.containers().iter().position(|cc| cc == c));
+
+        if let Some(origin_container_idx) = origin_container_idx {
+            // Moving normal container window
+            self.transfer_container(
+                (
+                    origin_monitor_idx,
+                    origin_workspace_idx,
+                    origin_container_idx,
+                ),
+                (
+                    target_monitor_idx,
+                    target_workspace_idx,
+                    target_container_idx,
+                ),
+            )?;
+        } else if let Some(idx) = origin_workspace
+            .floating_windows()
+            .iter()
+            .position(|w| w.hwnd == w_hwnd)
+        {
+            // Moving floating window
+            // There is no need to physically move the floating window between areas with
+            // `move_to_area` because the user already did that, so we only need to transfer the
+            // window to the target `floating_windows`
+            let floating_window = origin_workspace.floating_windows_mut().remove(idx);
+
+            let target_workspace = self
+                .monitors_mut()
+                .get_mut(target_monitor_idx)
+                .ok_or_else(|| anyhow!("there is no monitor at this idx"))?
+                .focused_workspace_mut()
+                .ok_or_else(|| anyhow!("there is no focused workspace for this monitor"))?;
+
+            target_workspace
+                .floating_windows_mut()
+                .push(floating_window);
+        } else if origin_workspace
+            .monocle_container()
+            .as_ref()
+            .and_then(|monocle| monocle.focused_window().map(|w| w.hwnd == w_hwnd))
+            .unwrap_or_default()
+        {
+            // Moving monocle container
+            if let Some(monocle_idx) = origin_workspace.monocle_container_restore_idx() {
+                let origin_workspace = self
+                    .monitors_mut()
+                    .get_mut(origin_monitor_idx)
+                    .ok_or_else(|| anyhow!("there is no monitor at this idx"))?
+                    .workspaces_mut()
+                    .get_mut(origin_workspace_idx)
+                    .ok_or_else(|| anyhow!("there is no workspace for this monitor"))?;
+                let mut uncloack_amount = 0;
+                for container in origin_workspace.containers_mut() {
+                    container.restore();
+                    uncloack_amount += 1;
+                }
+                origin_workspace.reintegrate_monocle_container()?;
+
+                self.transfer_container(
+                    (origin_monitor_idx, origin_workspace_idx, monocle_idx),
+                    (
+                        target_monitor_idx,
+                        target_workspace_idx,
+                        target_container_idx,
+                    ),
+                )?;
+                // After we restore the origin workspace, some windows that were cloacked
+                // by the monocle might now be uncloacked which would trigger a workspace
+                // reconciliation since the focused monitor would be different from origin.
+                // That workspace reconciliation would focus the window on the origin monitor.
+                // So we need to ignore the uncloak events produced by the origin workspace
+                // restore to avoid that issue.
+                self.uncloack_to_ignore = uncloack_amount;
+            }
+        } else if origin_workspace
+            .maximized_window()
+            .as_ref()
+            .map(|max| max.hwnd == w_hwnd)
+            .unwrap_or_default()
+        {
+            // Moving maximized_window
+            if let Some(maximized_idx) = origin_workspace.maximized_window_restore_idx() {
+                self.focus_monitor(origin_monitor_idx)?;
+                let origin_monitor = self
+                    .focused_monitor_mut()
+                    .ok_or_else(|| anyhow!("there is no origin monitor"))?;
+                origin_monitor.focus_workspace(origin_workspace_idx)?;
+                self.unmaximize_window()?;
+                self.focus_monitor(target_monitor_idx)?;
+                let target_monitor = self
+                    .focused_monitor_mut()
+                    .ok_or_else(|| anyhow!("there is no target monitor"))?;
+                target_monitor.focus_workspace(target_workspace_idx)?;
+
+                self.transfer_container(
+                    (origin_monitor_idx, origin_workspace_idx, maximized_idx),
+                    (
+                        target_monitor_idx,
+                        target_workspace_idx,
+                        target_container_idx,
+                    ),
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -1832,7 +1999,12 @@ impl WindowManager {
 
         tracing::info!("cycling container windows");
 
-        let container = self.focused_container_mut()?;
+        let container =
+            if let Some(container) = self.focused_workspace_mut()?.monocle_container_mut() {
+                container
+            } else {
+                self.focused_container_mut()?
+            };
 
         let len = NonZeroUsize::new(container.windows().len())
             .ok_or_else(|| anyhow!("there must be at least one window in a container"))?;
@@ -1856,7 +2028,12 @@ impl WindowManager {
 
         tracing::info!("focusing container window at index {idx}");
 
-        let container = self.focused_container_mut()?;
+        let container =
+            if let Some(container) = self.focused_workspace_mut()?.monocle_container_mut() {
+                container
+            } else {
+                self.focused_container_mut()?
+            };
 
         let len = NonZeroUsize::new(container.windows().len())
             .ok_or_else(|| anyhow!("there must be at least one window in a container"))?;
@@ -1972,8 +2149,16 @@ impl WindowManager {
                 new_idx
             };
 
+            let mut target_container_is_stack = false;
+
+            if let Some(container) = workspace.containers().get(adjusted_new_index) {
+                if container.windows().len() > 1 {
+                    target_container_is_stack = true;
+                }
+            }
+
             if let Some(current) = workspace.focused_container() {
-                if current.windows().len() > 1 {
+                if current.windows().len() > 1 && !target_container_is_stack {
                     workspace.focus_container(adjusted_new_index);
                     workspace.move_window_to_container(current_container_idx)?;
                 } else {

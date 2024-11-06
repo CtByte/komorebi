@@ -11,12 +11,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-/// The `komorebi.bar.json` configuration file reference for `v0.1.30`
+/// The `komorebi.bar.json` configuration file reference for `v0.1.31`
 pub struct KomobarConfig {
     /// Bar positioning options
     #[serde(alias = "viewport")]
     pub position: Option<PositionConfig>,
-    /// Frame options (see: https://docs.rs/egui/latest/egui/containers/struct.Frame.html)
+    /// Frame options (see: https://docs.rs/egui/latest/egui/containers/frame/struct.Frame.html)
     pub frame: Option<FrameConfig>,
     /// Monitor options
     pub monitor: MonitorConfig,
@@ -136,11 +136,13 @@ impl From<Position> for Pos2 {
 pub enum KomobarTheme {
     /// A theme from catppuccin-egui
     Catppuccin {
+        /// Name of the Catppuccin theme (theme previews: https://github.com/catppuccin/catppuccin)
         name: komorebi_themes::Catppuccin,
         accent: Option<komorebi_themes::CatppuccinValue>,
     },
     /// A theme from base16-egui-themes
     Base16 {
+        /// Name of the Base16 theme (theme previews: https://tinted-theming.github.io/base16-gallery)
         name: komorebi_themes::Base16,
         accent: Option<komorebi_themes::Base16Value>,
     },

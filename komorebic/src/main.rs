@@ -25,7 +25,7 @@ use fs_tail::TailedFile;
 use komorebi_client::resolve_home_path;
 use komorebi_client::send_message;
 use komorebi_client::send_query;
-use komorebi_client::ApplicationConfiguration;
+use komorebi_client::ApplicationSpecificConfiguration;
 use komorebi_client::Notification;
 use lazy_static::lazy_static;
 use miette::NamedSource;
@@ -748,6 +748,7 @@ struct AnimationStyle {
 #[allow(clippy::struct_excessive_bools)]
 struct Start {
     /// Allow the use of komorebi's custom focus-follows-mouse implementation
+    #[clap(hide = true)]
     #[clap(short, long = "ffm")]
     ffm: bool,
     /// Path to a static configuration JSON file
@@ -775,6 +776,9 @@ struct Stop {
     /// Stop whkd if it is running as a background process
     #[clap(long)]
     whkd: bool,
+    /// Stop ahk if it is running as a background process
+    #[clap(long)]
+    ahk: bool,
     /// Stop komorebi-bar if it is running as a background process
     #[clap(long)]
     bar: bool,
@@ -845,6 +849,12 @@ struct FormatAppSpecificConfiguration {
 }
 
 #[derive(Parser)]
+struct ConvertAppSpecificConfiguration {
+    /// YAML file from which the application-specific configurations should be loaded
+    path: PathBuf,
+}
+
+#[derive(Parser)]
 struct AltFocusHack {
     #[clap(value_enum)]
     boolean_state: BooleanState,
@@ -856,6 +866,7 @@ struct EnableAutostart {
     #[clap(action, short, long)]
     config: Option<PathBuf>,
     /// Enable komorebi's custom focus-follows-mouse implementation
+    #[clap(hide = true)]
     #[clap(short, long = "ffm")]
     ffm: bool,
     /// Enable autostart of whkd
@@ -1041,6 +1052,8 @@ enum SubCommand {
     /// Focus the specified workspace
     #[clap(arg_required_else_help = true)]
     FocusNamedWorkspace(FocusNamedWorkspace),
+    /// Close the focused workspace (must be empty and unnamed)
+    CloseWorkspace,
     /// Focus the monitor in the given cycle direction
     #[clap(arg_required_else_help = true)]
     CycleMonitor(CycleMonitor),
@@ -1089,6 +1102,7 @@ enum SubCommand {
     #[clap(arg_required_else_help = true)]
     CycleLayout(CycleLayout),
     /// Load a custom layout from file for the focused workspace
+    #[clap(hide = true)]
     #[clap(arg_required_else_help = true)]
     LoadCustomLayout(LoadCustomLayout),
     /// Flip the layout on the focused workspace (BSP only)
@@ -1133,9 +1147,11 @@ enum SubCommand {
     #[clap(arg_required_else_help = true)]
     NamedWorkspaceLayout(NamedWorkspaceLayout),
     /// Set a custom layout for the specified workspace
+    #[clap(hide = true)]
     #[clap(arg_required_else_help = true)]
     WorkspaceCustomLayout(WorkspaceCustomLayout),
     /// Set a custom layout for the specified workspace
+    #[clap(hide = true)]
     #[clap(arg_required_else_help = true)]
     NamedWorkspaceCustomLayout(NamedWorkspaceCustomLayout),
     /// Add a dynamic layout rule for the specified workspace
@@ -1145,9 +1161,11 @@ enum SubCommand {
     #[clap(arg_required_else_help = true)]
     NamedWorkspaceLayoutRule(NamedWorkspaceLayoutRule),
     /// Add a dynamic custom layout for the specified workspace
+    #[clap(hide = true)]
     #[clap(arg_required_else_help = true)]
     WorkspaceCustomLayoutRule(WorkspaceCustomLayoutRule),
     /// Add a dynamic custom layout for the specified workspace
+    #[clap(hide = true)]
     #[clap(arg_required_else_help = true)]
     NamedWorkspaceCustomLayoutRule(NamedWorkspaceCustomLayoutRule),
     /// Clear all dynamic layout rules for the specified workspace
@@ -1306,9 +1324,11 @@ enum SubCommand {
     #[clap(arg_required_else_help = true)]
     AnimationStyle(AnimationStyle),
     /// Enable or disable focus follows mouse for the operating system
+    #[clap(hide = true)]
     #[clap(arg_required_else_help = true)]
     FocusFollowsMouse(FocusFollowsMouse),
     /// Toggle focus follows mouse for the operating system
+    #[clap(hide = true)]
     #[clap(arg_required_else_help = true)]
     ToggleFocusFollowsMouse(ToggleFocusFollowsMouse),
     /// Enable or disable mouse follows focus on all workspaces
@@ -1324,14 +1344,19 @@ enum SubCommand {
     #[clap(arg_required_else_help = true)]
     #[clap(alias = "pwsh-asc")]
     PwshAppSpecificConfiguration(PwshAppSpecificConfiguration),
-    /// Format a YAML file for use with the 'ahk-app-specific-configuration' command
+    /// Convert a v1 ASC YAML file to a v2 ASC JSON file
+    #[clap(arg_required_else_help = true)]
+    #[clap(alias = "convert-asc")]
+    ConvertAppSpecificConfiguration(ConvertAppSpecificConfiguration),
+    /// Format a YAML file for use with the 'app-specific-configuration' command
     #[clap(arg_required_else_help = true)]
     #[clap(alias = "fmt-asc")]
+    #[clap(hide = true)]
     FormatAppSpecificConfiguration(FormatAppSpecificConfiguration),
-    /// Fetch the latest version of applications.yaml from komorebi-application-specific-configuration
+    /// Fetch the latest version of applications.json from komorebi-application-specific-configuration
     #[clap(alias = "fetch-asc")]
     FetchAppSpecificConfiguration,
-    /// Generate a JSON Schema for applications.yaml
+    /// Generate a JSON Schema for applications.json
     #[clap(alias = "asc-schema")]
     ApplicationSpecificConfigurationSchema,
     /// Generate a JSON Schema of subscription notifications
@@ -1389,6 +1414,14 @@ fn main() -> Result<()> {
                 "docgen",
                 "alt-focus-hack",
                 "identify-border-overflow-application",
+                "load-custom-layout",
+                "workspace-custom-layout",
+                "named-workspace-custom-layout",
+                "workspace-custom-layout-rule",
+                "named-workspace-custom-layout-rule",
+                "focus-follows-mouse",
+                "toggle-focus-follows-mouse",
+                "format-app-specific-configuration",
             ];
 
             for cmd in subcommands {
@@ -1421,13 +1454,13 @@ fn main() -> Result<()> {
             std::fs::write(HOME_DIR.join("komorebi.json"), komorebi_json)?;
             std::fs::write(HOME_DIR.join("komorebi.bar.json"), komorebi_bar_json)?;
 
-            let applications_yaml = include_str!("../applications.yaml");
-            std::fs::write(HOME_DIR.join("applications.yaml"), applications_yaml)?;
+            let applications_json = include_str!("../applications.json");
+            std::fs::write(HOME_DIR.join("applications.json"), applications_json)?;
 
             let whkdrc = include_str!("../../docs/whkdrc.sample");
             std::fs::write(WHKD_CONFIG_DIR.join("whkdrc"), whkdrc)?;
 
-            println!("Example komorebi.json, komorebi.bar.json, whkdrc and latest applications.yaml files created");
+            println!("Example komorebi.json, komorebi.bar.json, whkdrc and latest applications.json files created");
             println!("You can now run komorebic start --whkd --bar");
         }
         SubCommand::EnableAutostart(args) => {
@@ -2016,7 +2049,7 @@ if (!(Get-Process whkd -ErrorAction SilentlyContinue))
 
                 let script = format!(
                     r#"
-  Start-Process '{ahk}' '{config}' -WindowStyle hidden
+  Start-Process '"{ahk}"' '"{config}"' -WindowStyle hidden
                 "#,
                     config = config_ahk.display()
                 );
@@ -2048,7 +2081,7 @@ if (!(Get-Process whkd -ErrorAction SilentlyContinue))
                     let mut config = StaticConfig::read(config)?;
                     if let Some(display_bar_configurations) = &mut config.bar_configurations {
                         for config_file_path in &mut *display_bar_configurations {
-                            let script = r"Start-Process 'komorebi-bar' '--config CONFIGFILE' -WindowStyle hidden"
+                            let script = r#"Start-Process 'komorebi-bar' '--config "CONFIGFILE"' -WindowStyle hidden"#
                             .replace("CONFIGFILE", &config_file_path.to_string_lossy());
 
                             match powershell_script::run(&script) {
@@ -2080,11 +2113,16 @@ if (!(Get-Process komorebi-bar -ErrorAction SilentlyContinue))
             }
 
             println!("\nThank you for using komorebi!\n");
-            println!("* Become a sponsor https://github.com/sponsors/LGUG2Z - Even $1/month makes a big difference");
+            println!("# Sponsorship");
+            println!("* Become a sponsor https://github.com/sponsors/LGUG2Z - $5/month makes a big difference");
+            println!("* Leave a tip https://ko-fi.com/lgug2z - An alternative to GitHub Sponsors");
             println!(
-                "* Subscribe to https://youtube.com/@LGUG2Z - Live dev videos and feature previews"
+                "* Subscribe to https://youtube.com/@LGUG2Z - Development videos, feature previews and release overviews"
             );
+            println!("\n# Community");
             println!("* Join the Discord https://discord.gg/mGkn66PHkx - Chat, ask questions, share your desktops");
+            println!("* Explore the Awesome Komorebi list https://github.com/LGUG2Z/awesome-komorebi - Projects in the komorebi ecosystem");
+            println!("\n# Documentation");
             println!("* Read the docs https://lgug2z.github.io/komorebi - Quickly search through all komorebic commands");
 
             let bar_config = arg.config.map_or_else(
@@ -2138,6 +2176,35 @@ Stop-Process -Name:whkd -ErrorAction SilentlyContinue
                 let script = r"
 Stop-Process -Name:komorebi-bar -ErrorAction SilentlyContinue
                 ";
+                match powershell_script::run(script) {
+                    Ok(_) => {
+                        println!("{script}");
+                    }
+                    Err(error) => {
+                        println!("Error: {error}");
+                    }
+                }
+            }
+
+            if arg.ahk {
+                let script = r#"
+if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+    (Get-CimInstance Win32_Process | Where-Object {
+        ($_.CommandLine -like '*komorebi.ahk"') -and
+        ($_.Name -in @('AutoHotkey.exe', 'AutoHotkey64.exe', 'AutoHotkey32.exe', 'AutoHotkeyUX.exe'))
+    } | Select-Object -First 1) | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+    }
+} else {
+    (Get-WmiObject Win32_Process | Where-Object {
+        ($_.CommandLine -like '*komorebi.ahk"') -and
+        ($_.Name -in @('AutoHotkey.exe', 'AutoHotkey64.exe', 'AutoHotkey32.exe', 'AutoHotkeyUX.exe'))
+    } | Select-Object -First 1) | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+    }
+}
+"#;
+
                 match powershell_script::run(script) {
                     Ok(_) => {
                         println!("{script}");
@@ -2278,6 +2345,9 @@ Stop-Process -Name:komorebi -ErrorAction SilentlyContinue
         }
         SubCommand::FocusNamedWorkspace(arg) => {
             send_message(&SocketMessage::FocusNamedWorkspace(arg.workspace))?;
+        }
+        SubCommand::CloseWorkspace => {
+            send_message(&SocketMessage::CloseWorkspace)?;
         }
         SubCommand::CycleMonitor(arg) => {
             send_message(&SocketMessage::CycleFocusMonitor(arg.cycle_direction))?;
@@ -2572,6 +2642,14 @@ Stop-Process -Name:komorebi -ErrorAction SilentlyContinue
                 generated_config.display()
             );
         }
+        SubCommand::ConvertAppSpecificConfiguration(arg) => {
+            let file_path = resolve_home_path(arg.path)?;
+            let content = std::fs::read_to_string(&file_path)?;
+            let mut asc = ApplicationConfigurationGenerator::load(&content)?;
+            asc.sort_by(|a, b| a.name.cmp(&b.name));
+            let v2 = ApplicationSpecificConfiguration::from(asc);
+            println!("{}", serde_json::to_string_pretty(&v2)?);
+        }
         SubCommand::FormatAppSpecificConfiguration(arg) => {
             let file_path = resolve_home_path(arg.path)?;
             let content = std::fs::read_to_string(&file_path)?;
@@ -2588,10 +2666,10 @@ Stop-Process -Name:komorebi -ErrorAction SilentlyContinue
             println!("File successfully formatted for PRs to https://github.com/LGUG2Z/komorebi-application-specific-configuration");
         }
         SubCommand::FetchAppSpecificConfiguration => {
-            let content = reqwest::blocking::get("https://raw.githubusercontent.com/LGUG2Z/komorebi-application-specific-configuration/master/applications.yaml")?
+            let content = reqwest::blocking::get("https://raw.githubusercontent.com/LGUG2Z/komorebi-application-specific-configuration/master/applications.json")?
                 .text()?;
 
-            let output_file = HOME_DIR.join("applications.yaml");
+            let output_file = HOME_DIR.join("applications.json");
 
             let mut file = OpenOptions::new()
                 .write(true)
@@ -2601,14 +2679,14 @@ Stop-Process -Name:komorebi -ErrorAction SilentlyContinue
 
             file.write_all(content.as_bytes())?;
 
-            println!("Latest version of applications.yaml from https://github.com/LGUG2Z/komorebi-application-specific-configuration downloaded\n");
+            println!("Latest version of applications.json from https://github.com/LGUG2Z/komorebi-application-specific-configuration downloaded\n");
             println!(
                "You can add this to your komorebi.json static configuration file like this: \n\n\"app_specific_configuration_path\": \"{}\"",
                output_file.display().to_string().replace("\\", "/")
             );
         }
         SubCommand::ApplicationSpecificConfigurationSchema => {
-            let asc = schema_for!(Vec<ApplicationConfiguration>);
+            let asc = schema_for!(ApplicationSpecificConfiguration);
             let schema = serde_json::to_string_pretty(&asc)?;
             println!("{schema}");
         }

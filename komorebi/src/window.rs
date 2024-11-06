@@ -41,6 +41,7 @@ use crate::styles::WindowStyle;
 use crate::transparency_manager;
 use crate::window_manager_event::WindowManagerEvent;
 use crate::windows_api::WindowsApi;
+use crate::FLOATING_APPLICATIONS;
 use crate::HIDDEN_HWNDS;
 use crate::HIDING_BEHAVIOUR;
 use crate::IGNORE_IDENTIFIERS;
@@ -565,6 +566,7 @@ pub struct RuleDebug {
     pub matches_ignore_identifier: Option<MatchingRule>,
     pub matches_managed_override: Option<MatchingRule>,
     pub matches_layered_whitelist: Option<MatchingRule>,
+    pub matches_floating_applications: Option<MatchingRule>,
     pub matches_wsl2_gui: Option<String>,
     pub matches_no_titlebar: Option<String>,
 }
@@ -592,7 +594,7 @@ fn window_is_eligible(
     let regex_identifiers = REGEX_IDENTIFIERS.lock();
 
     let ignore_identifiers = IGNORE_IDENTIFIERS.lock();
-    let should_float = if let Some(rule) = should_act(
+    let should_ignore = if let Some(rule) = should_act(
         title,
         exe_name,
         class,
@@ -621,7 +623,19 @@ fn window_is_eligible(
         false
     };
 
-    if should_float && !managed_override {
+    let floating_identifiers = FLOATING_APPLICATIONS.lock();
+    if let Some(rule) = should_act(
+        title,
+        exe_name,
+        class,
+        path,
+        &floating_identifiers,
+        &regex_identifiers,
+    ) {
+        debug.matches_floating_applications = Some(rule);
+    }
+
+    if should_ignore && !managed_override {
         return false;
     }
 
@@ -763,10 +777,7 @@ pub fn should_act_individual(
     let mut should_act = false;
 
     match identifier.matching_strategy {
-        None => {
-            panic!("there is no matching strategy identified for this rule");
-        }
-        Some(MatchingStrategy::Legacy) => match identifier.kind {
+        None | Some(MatchingStrategy::Legacy) => match identifier.kind {
             ApplicationIdentifier::Title => {
                 if title.starts_with(&identifier.id) || title.ends_with(&identifier.id) {
                     should_act = true;

@@ -128,13 +128,15 @@ impl BarWidget for Komorebi {
         if self.workspaces.enable {
             let mut update = None;
 
-            for (i, ws) in komorebi_notification_state.workspaces.iter().enumerate() {
-                if ui
-                    .add(SelectableLabel::new(
-                        komorebi_notification_state.selected_workspace.eq(ws),
-                        ws.to_string(),
-                    ))
-                    .clicked()
+            for (i, (ws, should_show)) in komorebi_notification_state.workspaces.iter().enumerate()
+            {
+                if *should_show
+                    && ui
+                        .add(SelectableLabel::new(
+                            komorebi_notification_state.selected_workspace.eq(ws),
+                            ws.to_string(),
+                        ))
+                        .clicked()
                 {
                     update = Some(ws.to_string());
                     let mut proceed = true;
@@ -400,7 +402,7 @@ fn img_to_texture(ctx: &Context, rgba_image: &RgbaImage) -> TextureHandle {
 
 #[derive(Clone, Debug)]
 pub struct KomorebiNotificationState {
-    pub workspaces: Vec<String>,
+    pub workspaces: Vec<(String, bool)>,
     pub selected_workspace: String,
     pub focused_container_information: (Vec<String>, Vec<Option<RgbaImage>>, usize),
     pub layout: KomorebiLayout,
@@ -451,15 +453,23 @@ impl KomorebiNotificationState {
                 }
             },
             Ok(notification) => {
-                if let NotificationEvent::Socket(SocketMessage::ReloadStaticConfiguration(path)) =
-                    notification.event
-                {
-                    if let Ok(config) = komorebi_client::StaticConfig::read(&path) {
-                        if let Some(theme) = config.theme {
-                            apply_theme(ctx, KomobarTheme::from(theme), bg_color);
-                            tracing::info!("applied theme from updated komorebi.json");
+                match notification.event {
+                    NotificationEvent::WindowManager(_) => {}
+                    NotificationEvent::Socket(message) => match message {
+                        SocketMessage::ReloadStaticConfiguration(path) => {
+                            if let Ok(config) = komorebi_client::StaticConfig::read(&path) {
+                                if let Some(theme) = config.theme {
+                                    apply_theme(ctx, KomobarTheme::from(theme), bg_color.clone());
+                                    tracing::info!("applied theme from updated komorebi.json");
+                                }
+                            }
                         }
-                    }
+                        SocketMessage::Theme(theme) => {
+                            apply_theme(ctx, KomobarTheme::from(theme), bg_color);
+                            tracing::info!("applied theme from komorebi socket message");
+                        }
+                        _ => {}
+                    },
                 }
 
                 self.mouse_follows_focus = notification.state.mouse_follows_focus;
@@ -477,16 +487,16 @@ impl KomorebiNotificationState {
                     .unwrap_or_else(|| format!("{}", focused_workspace_idx + 1));
 
                 for (i, ws) in monitor.workspaces().iter().enumerate() {
-                    let should_add = if self.hide_empty_workspaces {
+                    let should_show = if self.hide_empty_workspaces {
                         focused_workspace_idx == i || !ws.containers().is_empty()
                     } else {
                         true
                     };
 
-                    if should_add {
-                        workspaces
-                            .push(ws.name().to_owned().unwrap_or_else(|| format!("{}", i + 1)));
-                    }
+                    workspaces.push((
+                        ws.name().to_owned().unwrap_or_else(|| format!("{}", i + 1)),
+                        should_show,
+                    ));
                 }
 
                 self.workspaces = workspaces;

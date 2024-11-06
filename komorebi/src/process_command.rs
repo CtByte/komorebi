@@ -51,6 +51,7 @@ use crate::stackbar_manager;
 use crate::stackbar_manager::STACKBAR_FONT_FAMILY;
 use crate::stackbar_manager::STACKBAR_FONT_SIZE;
 use crate::static_config::StaticConfig;
+use crate::theme_manager;
 use crate::transparency_manager;
 use crate::window::RuleDebug;
 use crate::window::Window;
@@ -759,6 +760,44 @@ impl WindowManager {
                 );
 
                 self.focus_workspace(workspace_idx)?;
+            }
+            SocketMessage::CloseWorkspace => {
+                // This is to ensure that even on an empty workspace on a secondary monitor, the
+                // secondary monitor where the cursor is focused will be used as the target for
+                // the workspace switch op
+                if let Some(monitor_idx) = self.monitor_idx_from_current_pos() {
+                    self.focus_monitor(monitor_idx)?;
+                }
+
+                let mut can_close = false;
+
+                if let Some(monitor) = self.focused_monitor_mut() {
+                    let focused_workspace_idx = monitor.focused_workspace_idx();
+                    let last_focused_workspace = monitor
+                        .last_focused_workspace()
+                        .unwrap_or(focused_workspace_idx.saturating_sub(1));
+
+                    if let Some(workspace) = monitor.focused_workspace() {
+                        if monitor.workspaces().len() > 1
+                            && workspace.containers().is_empty()
+                            && workspace.floating_windows().is_empty()
+                            && workspace.monocle_container().is_none()
+                            && workspace.maximized_window().is_none()
+                            && workspace.name().is_none()
+                        {
+                            can_close = true;
+                        }
+                    }
+
+                    if can_close
+                        && monitor
+                            .workspaces_mut()
+                            .remove(focused_workspace_idx)
+                            .is_some()
+                    {
+                        self.focus_workspace(last_focused_workspace)?;
+                    }
+                }
             }
             SocketMessage::FocusLastWorkspace => {
                 // This is to ensure that even on an empty workspace on a secondary monitor, the
@@ -1587,6 +1626,9 @@ impl WindowManager {
                 let schema = serde_json::to_string_pretty(&rule_debug)?;
 
                 reply.write_all(schema.as_bytes())?;
+            }
+            SocketMessage::Theme(theme) => {
+                theme_manager::send_notification(theme);
             }
             // Deprecated commands
             SocketMessage::AltFocusHack(_)
