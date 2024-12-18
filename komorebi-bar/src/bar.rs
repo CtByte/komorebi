@@ -356,7 +356,7 @@ impl Komobar {
                 });
         }
 
-        right_widgets.reverse();
+        //right_widgets.reverse();
 
         self.left_widgets = left_widgets;
         self.center_widgets = center_widgets;
@@ -498,29 +498,49 @@ impl eframe::App for Komobar {
             // Apply grouping logic for the bar as a whole
             render_config.clone().apply_on_bar(ui, |ui| {
                 ui.horizontal_centered(|ui| {
-                    // Left-aligned widgets layout
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        let mut render_conf = render_config.clone();
-                        render_conf.alignment = Some(Alignment::Left);
+                    //// Left-aligned widgets layout
+                    //ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    //    let mut render_conf = render_config.clone();
+                    //    render_conf.alignment = Some(Alignment::Left);
 
-                        render_config.apply_on_alignment(ui, |ui| {
-                            for w in &mut self.left_widgets {
-                                w.render(ctx, ui, &mut render_conf);
-                            }
-                        });
-                    });
+                    //    render_config.apply_on_alignment(ui, |ui| {
+                    //        for w in &mut self.left_widgets {
+                    //            w.render(ctx, ui, &mut render_conf);
+                    //        }
+                    //    });
+                    //});
 
-                    // Right-aligned widgets layout
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let mut render_conf = render_config.clone();
-                        render_conf.alignment = Some(Alignment::Right);
+                    //// Right-aligned widgets layout
+                    //ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    //    let mut render_conf = render_config.clone();
+                    //    render_conf.alignment = Some(Alignment::Right);
 
-                        render_config.apply_on_alignment(ui, |ui| {
-                            for w in &mut self.right_widgets {
-                                w.render(ctx, ui, &mut render_conf);
-                            }
-                        });
-                    });
+                    //    render_config.apply_on_alignment(ui, |ui| {
+                    //        for w in &mut self.right_widgets {
+                    //            w.render(ctx, ui, &mut render_conf);
+                    //        }
+                    //    });
+                    //});
+
+                    if !self.left_widgets.is_empty() {
+                        // Floating left widgets
+                        Area::new(Id::new("left_panel"))
+                            .anchor(Align2::LEFT_CENTER, [self.config.widget_spacing.unwrap_or(10.0), 0.0]) // Align in the center of the window
+                            .show(ctx, |ui| {
+                                Frame::none().show(ui, |ui| {
+                                    ui.horizontal_centered(|ui| {
+                                        let mut render_conf = render_config.clone();
+                                        render_conf.alignment = Some(Alignment::Left);
+
+                                        render_config.apply_on_alignment(ui, |ui| {
+                                            for w in &mut self.left_widgets {
+                                                w.render(ctx, ui, &mut render_conf);
+                                            }
+                                        });
+                                    });
+                                });
+                            });
+                    }
 
                     if !self.center_widgets.is_empty() {
                         // Floating center widgets
@@ -534,6 +554,26 @@ impl eframe::App for Komobar {
 
                                         render_config.apply_on_alignment(ui, |ui| {
                                             for w in &mut self.center_widgets {
+                                                w.render(ctx, ui, &mut render_conf);
+                                            }
+                                        });
+                                    });
+                                });
+                            });
+                    }
+
+                    if !self.right_widgets.is_empty() {
+                        // Floating right widgets
+                        Area::new(Id::new("right_panel"))
+                            .anchor(Align2::RIGHT_CENTER, [-self.config.widget_spacing.unwrap_or(10.0), 0.0]) // Align in the center of the window
+                            .show(ctx, |ui| {
+                                Frame::none().show(ui, |ui| {
+                                    ui.horizontal_centered(|ui| {
+                                        let mut render_conf = render_config.clone();
+                                        render_conf.alignment = Some(Alignment::Right);
+
+                                        render_config.apply_on_alignment(ui, |ui| {
+                                            for w in &mut self.right_widgets {
                                                 w.render(ctx, ui, &mut render_conf);
                                             }
                                         });
