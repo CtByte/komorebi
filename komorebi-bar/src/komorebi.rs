@@ -18,6 +18,7 @@ use eframe::egui::Frame;
 use eframe::egui::Image;
 use eframe::egui::Label;
 use eframe::egui::Margin;
+use eframe::egui::RichText;
 use eframe::egui::Rounding;
 use eframe::egui::Sense;
 use eframe::egui::Stroke;
@@ -168,8 +169,10 @@ impl BarWidget for Komorebi {
                         for (i, (ws, container_information, _)) in
                             komorebi_notification_state.workspaces.iter().enumerate()
                         {
+                            let is_selected = komorebi_notification_state.selected_workspace.eq(ws);
+
                             if SelectableFrame::new(
-                                komorebi_notification_state.selected_workspace.eq(ws),
+                                is_selected
                             )
                             .show(ui, |ui| {
                                 let mut has_icon = false;
@@ -178,7 +181,7 @@ impl BarWidget for Komorebi {
                                     || format == DisplayFormat::IconAndText
                                     || format == DisplayFormat::IconAndTextOnSelected
                                     || (format == DisplayFormat::TextAndIconOnSelected
-                                        && komorebi_notification_state.selected_workspace.eq(ws))
+                                        && is_selected)
                                 {
                                     let icons: Vec<_> =
                                         container_information.icons.iter().flatten().collect();
@@ -213,7 +216,7 @@ impl BarWidget for Komorebi {
                                         ui.allocate_painter(icon_size, Sense::hover());
                                     let stroke = Stroke::new(
                                         1.0,
-                                        ctx.style().visuals.selection.stroke.color,
+                                        if is_selected { ctx.style().visuals.selection.stroke.color} else { ui.style().visuals.text_color() },
                                     );
                                     let mut rect = response.rect;
                                     let rounding = Rounding::same(rect.width() * 0.1);
@@ -231,9 +234,14 @@ impl BarWidget for Komorebi {
                                     ui.response().on_hover_text(ws.to_string())
                                 } else if format != DisplayFormat::IconAndTextOnSelected
                                     || (format == DisplayFormat::IconAndTextOnSelected
-                                        && komorebi_notification_state.selected_workspace.eq(ws))
+                                        && is_selected)
                                 {
-                                    ui.add(Label::new(ws.to_string()).selectable(false))
+                                    if is_selected {
+                                        ui.add(Label::new(RichText::new(ws.to_string()).color(ctx.style().visuals.selection.stroke.color)).selectable(false))
+                                    }
+                                    else {
+                                        ui.add(Label::new(ws.to_string()).selectable(false))
+                                    }
                                 } else {
                                     ui.response()
                                 }
