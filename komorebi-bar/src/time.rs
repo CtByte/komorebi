@@ -3,6 +3,8 @@ use crate::config::LabelPrefix;
 use crate::render::RenderConfig;
 use crate::selected_frame::SelectableFrame;
 use crate::widget::BarWidget;
+use chrono::Local;
+use chrono::NaiveTime;
 use chrono_tz::Tz;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::Align;
@@ -107,23 +109,94 @@ pub struct Time {
 }
 
 impl Time {
-    fn output(&mut self) -> String {
-        match &self.timezone {
+    fn output(&mut self) -> (String, String) {
+        let (formatted, current_time) = match &self.timezone {
             Some(timezone) => match timezone.parse::<Tz>() {
-                Ok(tz) => chrono::Local::now()
-                    .with_timezone(&tz)
-                    .format(&self.format.fmt_string())
-                    .to_string()
-                    .trim()
-                    .to_string(),
-                Err(_) => format!("Invalid timezone: {}", timezone),
+                Ok(tz) => {
+                    let dt = Local::now().with_timezone(&tz);
+                    (
+                        dt.format(&self.format.fmt_string())
+                            .to_string()
+                            .trim()
+                            .to_string(),
+                        Some(dt.time()),
+                    )
+                }
+                Err(_) => (format!("Invalid timezone: {:?}", timezone), None),
             },
-            None => chrono::Local::now()
-                .format(&self.format.fmt_string())
-                .to_string()
-                .trim()
-                .to_string(),
+            None => {
+                let dt = Local::now();
+                (
+                    dt.format(&self.format.fmt_string())
+                        .to_string()
+                        .trim()
+                        .to_string(),
+                    Some(dt.time()),
+                )
+            }
+        };
+
+        if current_time.is_none() {
+            return (
+                formatted,
+                egui_phosphor::regular::WARNING_CIRCLE.to_string(),
+            );
         }
+
+        let time_ranges = vec![
+            (
+                egui_phosphor::regular::MOON.to_string(),
+                NaiveTime::from_hms_opt(0, 0, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::ALARM.to_string(),
+                NaiveTime::from_hms_opt(6, 0, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::BREAD.to_string(),
+                NaiveTime::from_hms_opt(6, 1, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::BARBELL.to_string(),
+                NaiveTime::from_hms_opt(6, 30, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::COFFEE.to_string(),
+                NaiveTime::from_hms_opt(8, 0, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::CLOCK.to_string(),
+                NaiveTime::from_hms_opt(8, 30, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::HAMBURGER.to_string(),
+                NaiveTime::from_hms_opt(12, 0, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::CLOCK_AFTERNOON.to_string(),
+                NaiveTime::from_hms_opt(12, 30, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::FORK_KNIFE.to_string(),
+                NaiveTime::from_hms_opt(18, 0, 0).expect("invalid"),
+            ),
+            (
+                egui_phosphor::regular::MOON_STARS.to_string(),
+                NaiveTime::from_hms_opt(18, 30, 0).expect("invalid"),
+            ),
+        ];
+
+        let current_range = time_ranges
+            .iter()
+            .rev()
+            .find(|&(_, start)| current_time.unwrap() > *start)
+            .cloned()
+            .unwrap_or((
+                egui_phosphor::regular::CLOCK.to_string(),
+                NaiveTime::default(),
+            ));
+
+        (formatted, current_range.0)
     }
 
     fn paint_binary_circle(
@@ -306,15 +379,13 @@ impl BarWidget for Time {
     fn render(&mut self, ctx: &Context, ui: &mut Ui, config: &mut RenderConfig) {
         if self.enable {
             let mut output = self.output();
-            if !output.is_empty() {
-                let use_binary_circle = output.starts_with('c');
-                let use_binary_rectangle = output.starts_with('r');
+            if !output.0.is_empty() {
+                let use_binary_circle = output.0.starts_with('c');
+                let use_binary_rectangle = output.0.starts_with('r');
 
                 let mut layout_job = LayoutJob::simple(
                     match self.label_prefix {
-                        LabelPrefix::Icon | LabelPrefix::IconAndText => {
-                            egui_phosphor::regular::CLOCK.to_string()
-                        }
+                        LabelPrefix::Icon | LabelPrefix::IconAndText => output.1,
                         LabelPrefix::None | LabelPrefix::Text => String::new(),
                     },
                     config.icon_font_id.clone(),
@@ -323,12 +394,12 @@ impl BarWidget for Time {
                 );
 
                 if let LabelPrefix::Text | LabelPrefix::IconAndText = self.label_prefix {
-                    output.insert_str(0, "TIME: ");
+                    output.0.insert_str(0, "TIME: ");
                 }
 
                 if !use_binary_circle && !use_binary_rectangle {
                     layout_job.append(
-                        &output,
+                        &output.0,
                         10.0,
                         TextFormat {
                             font_id: config.text_font_id.clone(),
@@ -351,9 +422,9 @@ impl BarWidget for Time {
 
                             if use_binary_circle || use_binary_rectangle {
                                 let ordered_output = if is_reversed {
-                                    output.chars().rev().collect()
+                                    output.0.chars().rev().collect()
                                 } else {
-                                    output
+                                    output.0
                                 };
 
                                 for (section_index, section) in
