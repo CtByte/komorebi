@@ -2902,6 +2902,7 @@ dependencies = [
  "ravif",
  "rayon",
  "rgb",
+ "serde",
  "tiff 0.10.3",
  "zune-core 0.5.1",
  "zune-jpeg 0.5.12",
@@ -3200,6 +3201,8 @@ dependencies = [
  "serde_json_lenient",
  "starship-battery",
  "sysinfo 0.37.2",
+ "systray-util",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "which",
@@ -6268,6 +6271,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "systray-util"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ed1728bebafe576d9d63c7d4beaa9e281b2acc72ec368932e3a9522168484d1"
+dependencies = [
+ "image 0.25.9",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "windows 0.58.0",
+ "windows-core 0.58.0",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.24.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6460,9 +6480,23 @@ dependencies = [
  "bytes",
  "libc",
  "mio 1.1.1",
+ "parking_lot",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af407857209536a95c8e56f8231ef2c2e2aff839b22e07a1ffcbc617e9db9fa5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
 ]
 
 [[package]]
